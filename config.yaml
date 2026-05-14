@@ -1,0 +1,59 @@
+# Pixiv 爬虫配置文件
+pixiv:
+  cookies:
+    session_id: "YOUR_SESSION_ID_HERE"
+    # 或者使用 refresh_token:
+    # refresh_token: "YOUR_REFRESH_TOKEN"
+
+scraper:
+  # 标签搜索（OR 逻辑，任一匹配即下载）
+  tags:
+    - "illust"
+    - "anime"
+  
+  # 排行榜配置
+  ranked:
+    enabled: false
+    mode: "daily"      # daily / weekly / monthly / rookie / original
+    content: "all"      # all / male / female / r18
+    date: null         # null 或 "20240115"
+  
+  # 指定画师 ID 列表（可选）
+  artists: []
+  
+  # 收藏数阈值（可选，null 表示不限制）
+  bookmarks_min: null
+  
+  # 最大下载数量
+  limit: 100
+
+download:
+  # 图片规格优先级
+  priority:
+    - "original"
+    - "large"
+    - "medium"
+    - "square_medium"
+  
+  # 存储根目录
+  root_dir: "images"
+  
+  # 文件命名
+  filename_format: "{artist_id}_{illust_id}_{title}"
+  
+  # 多标签策略：只存一份放第一个匹配标签目录
+  multi_tag_strategy: "first_match"
+
+deduplication:
+  # 已下载 ID 记录文件
+  id_file: "downloaded_ids.json"
+  
+  # 双重去重策略
+  strategy: "both"
+
+rate_limit:
+  # 请求间隔（秒）
+  delay: 3
+  
+  # 并发数（固定为 1）
+  concurrency: 1
