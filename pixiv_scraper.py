@@ -115,11 +115,9 @@ class PixivClient:
         
         logger.info(f"正在登录账号: {username}")
         
-        # 第一步：获取 PostKey（防机器人token）
-        timestamp = str(int(time.time()))
         post_key_url = "https://oauth.secure.pixiv.net/auth/token"
         
-        # 先尝试直接用用户名密码换 token（部分旧账号支持）
+        # 尝试 grant_type=password
         data = {
             "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT2Nkg1EG9eRboIbE",
             "client_secret": "W9JZoJe00qPvJ7yMFB99NzLTqFcJnzCIVJDfFwXVpw",
@@ -128,23 +126,24 @@ class PixivClient:
             "password": password,
         }
         
-        try:
-            response = self.session.post(post_key_url, data=data)
-            if response.status_code == 200:
-                result = response.json()
-                if 'response' in result and 'access_token' in result['response']:
-                    self.access_token = result['response']['access_token']
-                    self.session.headers['Authorization'] = f'Bearer {self.access_token}'
-                    logger.info("登录成功！")
-                    return
-        except Exception:
-            pass
+        logger.info("尝试 password grant...")
+        response = self.session.post(post_key_url, data=data)
+        logger.info(f"password grant 响应状态: {response.status_code}")
         
-        # 如果 grant_type=password 失败，尝试 cookie grant 方式
-        # 用 PHPSESSID 换 token（如果有的话）
-        logger.info("password grant 不可用，尝试 cookie grant...")
+        if response.status_code == 200:
+            result = response.json()
+            if 'response' in result and 'access_token' in result['response']:
+                self.access_token = result['response']['access_token']
+                self.session.headers['Authorization'] = f'Bearer {self.access_token}'
+                logger.info("登录成功！")
+                return
+            else:
+                logger.warning(f"password grant 返回异常: {result}")
+        else:
+            logger.warning(f"password grant 失败: {response.status_code} - {response.text[:200]}")
         
-        # 检查是否有 PHPSESSID
+        # 尝试 cookie grant（需要 PHPSESSID）
+        logger.info("尝试 cookie grant...")
         phpsessid = self.session.cookies.get('PHPSESSID')
         if phpsessid:
             data = {
@@ -153,24 +152,25 @@ class PixivClient:
                 "grant_type": "cookie",
                 "cookie": f"PHPSESSID={phpsessid}",
             }
-            try:
-                response = self.session.post(post_key_url, data=data)
-                if response.status_code == 200:
-                    result = response.json()
-                    if 'response' in result and 'access_token' in result['response']:
-                        self.access_token = result['response']['access_token']
-                        self.session.headers['Authorization'] = f'Bearer {self.access_token}'
-                        logger.info("Cookie grant 登录成功！")
-                        return
-            except Exception:
-                pass
+            response = self.session.post(post_key_url, data=data)
+            logger.info(f"cookie grant 响应状态: {response.status_code}")
+            if response.status_code == 200:
+                result = response.json()
+                if 'response' in result and 'access_token' in result['response']:
+                    self.access_token = result['response']['access_token']
+                    self.session.headers['Authorization'] = f'Bearer {self.access_token}'
+                    logger.info("Cookie grant 登录成功！")
+                    return
+        else:
+            logger.info("没有 PHPSESSID，跳过 cookie grant")
         
         # 所有方式都失败
         error_msg = (
-            "用户名密码登录失败！可能原因：\n"
+            "用户名密码登录失败！\n"
+            "可能原因：\n"
             "1. 账号有两步验证(2FA)，暂不支持\n"
-            "2. 账号有验证码，暂不支持\n"
-            "3. Pixiv 风控拦截\n"
+            "2. 账号有验证码保护，暂不支持\n"
+            "3. Pixiv 风控拦截（异地登录）\n"
             "建议使用 refresh_token 方式认证"
         )
         raise PermissionError(error_msg)
