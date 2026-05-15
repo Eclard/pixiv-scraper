@@ -43,12 +43,17 @@ def _validate_config(config: dict) -> None:
         if section not in config:
             raise ValueError(f"配置缺少必需部分: {section}")
     
-    # 验证 cookie 或 refresh_token
+    # 验证认证信息：支持 refresh_token / cookies / username+password 三种方式
     cookies = config.get('pixiv', {}).get('cookies', {})
     refresh_token = config.get('pixiv', {}).get('refresh_token')
+    username = config.get('pixiv', {}).get('username')
+    password = config.get('pixiv', {}).get('password')
     
-    if not cookies.get('session_id') and not refresh_token:
-        raise ValueError("必须提供 session_id cookie 或 refresh_token")
+    session_id = cookies.get('session_id') or cookies.get('PHPSESSID')
+    
+    has_auth = bool(session_id or refresh_token or (username and password))
+    if not has_auth:
+        raise ValueError("必须提供 refresh_token / cookies / username+password 三种认证方式之一")
 
 
 def load_downloaded_ids(id_file: str = "downloaded_ids.json") -> Set[str]:
@@ -84,7 +89,7 @@ class PixivClient:
         "Accept-Language": "zh-CN,zh;q=0.9",
     }
     
-    def __init__(self, cookies: dict = None, refresh_token: str = None):
+    def __init__(self, cookies: dict = None, refresh_token: str = None, username: str = None, password: str = None):
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
         self.access_token: Optional[str] = None
@@ -99,8 +104,76 @@ class PixivClient:
             
         elif refresh_token:
             self._refresh_access_token(refresh_token)
+        elif username and password:
+            self._login_with_username_password(username, password)
         else:
-            raise ValueError("需要提供 cookies 或 refresh_token")
+            raise ValueError("需要提供 cookies / refresh_token / username+password 三种认证方式之一")
+    
+    def _login_with_username_password(self, username: str, password: str) -> None:
+        """使用用户名密码登录，获取 access_token 和 cookies"""
+        import time
+        
+        logger.info(f"正在登录账号: {username}")
+        
+        # 第一步：获取 PostKey（防机器人token）
+        timestamp = str(int(time.time()))
+        post_key_url = "https://oauth.secure.pixiv.net/auth/token"
+        
+        # 先尝试直接用用户名密码换 token（部分旧账号支持）
+        data = {
+            "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT2Nkg1EG9eRboIbE",
+            "client_secret": "W9JZoJe00qPvJ7yMFB99NzLTqFcJnzCIVJDfFwXVpw",
+            "grant_type": "password",
+            "username": username,
+            "password": password,
+        }
+        
+        try:
+            response = self.session.post(post_key_url, data=data)
+            if response.status_code == 200:
+                result = response.json()
+                if 'response' in result and 'access_token' in result['response']:
+                    self.access_token = result['response']['access_token']
+                    self.session.headers['Authorization'] = f'Bearer {self.access_token}'
+                    logger.info("登录成功！")
+                    return
+        except Exception:
+            pass
+        
+        # 如果 grant_type=password 失败，尝试 cookie grant 方式
+        # 用 PHPSESSID 换 token（如果有的话）
+        logger.info("password grant 不可用，尝试 cookie grant...")
+        
+        # 检查是否有 PHPSESSID
+        phpsessid = self.session.cookies.get('PHPSESSID')
+        if phpsessid:
+            data = {
+                "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT2Nkg1EG9eRboIbE",
+                "client_secret": "W9JZoJe00qPvJ7yMFB99NzLTqFcJnzCIVJDfFwXVpw",
+                "grant_type": "cookie",
+                "cookie": f"PHPSESSID={phpsessid}",
+            }
+            try:
+                response = self.session.post(post_key_url, data=data)
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'response' in result and 'access_token' in result['response']:
+                        self.access_token = result['response']['access_token']
+                        self.session.headers['Authorization'] = f'Bearer {self.access_token}'
+                        logger.info("Cookie grant 登录成功！")
+                        return
+            except Exception:
+                pass
+        
+        # 所有方式都失败
+        error_msg = (
+            "用户名密码登录失败！可能原因：\n"
+            "1. 账号有两步验证(2FA)，暂不支持\n"
+            "2. 账号有验证码，暂不支持\n"
+            "3. Pixiv 风控拦截\n"
+            "建议使用 refresh_token 方式认证"
+        )
+        raise PermissionError(error_msg)
     
     def _refresh_access_token(self, refresh_token: str) -> None:
         """使用 refresh_token 获取新的 access_token"""
@@ -334,7 +407,9 @@ class PixivScraper:
         # 初始化 API 客户端
         cookies = config['pixiv'].get('cookies', {})
         refresh_token = config['pixiv'].get('refresh_token')
-        self.client = PixivClient(cookies=cookies, refresh_token=refresh_token)
+        username = config['pixiv'].get('username')
+        password = config['pixiv'].get('password')
+        self.client = PixivClient(cookies=cookies, refresh_token=refresh_token, username=username, password=password)
         
         # 配置
         self.tags = config['scraper']['tags']
